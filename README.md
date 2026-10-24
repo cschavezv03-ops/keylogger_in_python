@@ -2,8 +2,7 @@
 
 A small, educational keylogger written in Python with
 [`pynput`](https://pypi.org/project/pynput/). It listens for global keyboard
-events and appends what you type to `log.txt`, flushing the buffer every 10
-keystrokes.
+events and appends what you type to `log.txt`, one timestamped line per word.
 
 > **Disclaimer:** this project is for learning about input hooks and security
 > concepts only. Do not run it on a machine you do not own or without the
@@ -13,10 +12,15 @@ keystrokes.
 ## Features
 
 - Global keyboard capture on supported platforms.
-- Buffers 10 keystrokes before writing, so the file is not opened on every key.
-- `Space` is written as a newline.
-- Special keys (`Shift`, `Ctrl`, `Enter`, arrows, ...) are ignored.
-- `Esc` stops the listener.
+- Buffers complete words and writes one line per word, with a timestamp of
+  when the word started.
+- A word is closed by `Space`, `Enter` or `Tab`.
+- `Backspace` removes the last character of the word in progress.
+- `Shift` produces uppercase letters.
+- Keeps up to 10 finished lines in memory before opening the file.
+- Special keys (`Ctrl`, `Alt`, arrows, ...) are ignored.
+- `Esc` flushes everything pending and stops the listener, so no keystrokes
+  are lost.
 - Appends to `log.txt` instead of overwriting it.
 
 ## Requirements
@@ -64,20 +68,40 @@ cat log.txt        # Linux / macOS
 type log.txt       # Windows
 ```
 
-The file is written every 10 keystrokes. A trailing group of fewer than 10
-keys stays in memory until the buffer fills up again.
+Output format is `<timestamp> | <word>`:
+
+```
+2026-10-24 16:06:35 | hola
+2026-10-24 16:06:35 | mundo
+2026-10-24 16:06:35 | MAYUSculas
+```
+
+The timestamp is taken when the first character of the word is typed, so two
+words of the same sentence usually share it (seconds resolution). Words are
+written to disk in groups of up to 10 lines, and anything still in memory is
+flushed when you press `Esc`.
+
+Punctuation stays attached to the word it follows (`hola,` is logged as
+`hola,`), because only whitespace and `Enter`/`Tab` close a word.
 
 ## How it works
 
 | Function | Purpose |
 | --- | --- |
-| `on_press(key)` | Adds the key to the buffer, prints it, and calls `write_file` every 10 keystrokes. |
-| `write_file(keys)` | Appends the buffered keys to `log.txt`. `Key.space` becomes `\n`; keys whose name starts with `Key.` are skipped. |
-| `on_release(key)` | Returns `False` when `Esc` is released, which stops the listener. |
+| `now()` | Returns the current time as `YYYY-MM-DD HH:MM:SS`. |
+| `on_press(key)` | Tracks `Shift`, edits the word with `Backspace`, closes the word on `Space`/`Enter`/`Tab`, and appends characters. |
+| `flush_word()` | Turns the word in progress into a `timestamp \| word` line. |
+| `write_file()` | Appends the buffered lines to `log.txt` and empties the buffer. |
+| `flush_all()` | Flushes the pending word and the buffer (on `Esc` and at exit). |
+| `on_release(key)` | Clears `Shift`; returns `False` when `Esc` is released, which stops the listener. |
 
-Character keys are converted with `str(key).replace("'", "")`, so `'a'`
-becomes `a`. Named keys are represented as `Key.enter`, `Key.shift`, etc.,
-which is why they can be filtered with `startswith("Key.")`.
+Character keys are read from `key.char` instead of `str(key)`, so `'a'`
+becomes `a` and `Key.enter` has no `char` attribute (and is handled
+separately). Named keys that are not explicitly handled are ignored.
+
+Because the word buffer lives in memory, keystrokes typed into another
+application between two word boundaries end up in the same line. That is the
+expected trade-off for "log one line per word".
 
 ## Platform notes
 
@@ -111,7 +135,8 @@ Privacy & Security > Accessibility**, otherwise no events are delivered.
 
 ## Troubleshooting
 
-- **`log.txt` is empty or missing:** you may have typed fewer than 10 keys, the
+- **`log.txt` is empty or missing:** you may not have closed a word yet (the
+  word in progress is only written on `Space`/`Enter`/`Tab` or on `Esc`), the
   focused window may be a native Wayland window, or the process may not have
   permission to capture input.
 - **`ModuleNotFoundError: No module named 'pynput'`:** the virtual environment
